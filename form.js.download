@@ -1,0 +1,181 @@
+/* globals
+	$ gts
+	RecaptchaHandler EmailSubmissionConfirmationPageUrl SEOService ShowDialogResult RenoEventsNS ProductDoReport defaultValidationSettings
+	DEBUG
+*/
+// namespace declaration
+var StaticPageModule = {
+	fnAjaxSuccess: function (data, formId, resultSelector) {
+		var resultMessage;
+		// check if we have a result container or we need to use modal
+		var resultContainerExists = false;
+		var timeoutClose = 5000;
+
+		if (typeof resultSelector !== "undefined" && gts.jQuery("#" + resultSelector).length > 0) {
+			resultContainerExists = true;
+		}
+
+		if (data.success) {
+			$(document).trigger("EmailSubmission" + RenoEventsNS, { formId: formId });
+			resultMessage = "Your email has been successfully sent!";
+
+			if (typeof EmailSubmissionConfirmationPageUrl !== "undefined" && EmailSubmissionConfirmationPageUrl !== "") {
+				window.location.href = SEOService.AddMandatoryUrlParts(EmailSubmissionConfirmationPageUrl);
+			}
+			else if (resultContainerExists) {
+				gts.jQuery("#" + resultSelector).html(resultMessage)
+					.attr("class", "success")
+					.show();
+			}
+			else {
+				ProductDoReport(JSON.parse(data.reportData).ContactReportData.SerializedOutput, "RE.ContactUsForm.Submit");
+				ShowDialogResult("<div class=\"c-modal  success-message\"><div class=\"modal__container\"><div class=\"modal__item\"><div class=\"modal__title\"><h4 class=\"u-text-uppercase\">Success!</h4><a href=\"#\" class=\"modal__action  js-modal-close\"><i class=\"icon  icon-close\"></i><span style=\"display: none\">Close</span></a></div><div>"
+									+ "<div class=\"modal__section\"><p class=\"success\">" + resultMessage + "</p></div>"
+									+ "</div></div></div>", undefined, undefined, timeoutClose);
+			}
+
+			if (data.sendEmailObject) {
+				var blockedData = data.sendEmailObject;
+				ProductDoReport(blockedData.BlockedEmailSendReportData.SerializedOutput, "RE.BlockedEmailSendReport.BlockedEmailAgent");
+			}
+		}
+		else {
+			resultMessage = "An error has occurred while trying to send your email. Please try again!";
+
+			// this adds the exception message if the debug mode is on
+			if (DEBUG) {
+				resultMessage += "<br /><br /> Details: " + data.message;
+			}
+
+			if (resultContainerExists) {
+				gts.jQuery("#" + resultSelector).html(resultMessage)
+					.attr("class", "error")
+					.show();
+			}
+			else {
+				ShowDialogResult("<div class=\"c-modal\"><div class=\"modal__container\"><div class=\"modal__item\"><div class=\"modal__title\"><h4 class=\"u-text-uppercase\">Error!</h4><a href=\"#\" class=\"modal__action  js-modal-close\"><i class=\"icon  icon-close\"></i><span style=\"display: none\">Close</span></a></div><div>"
+									+ "<div class=\"modal__section\"><p class=\"error\">" + resultMessage + "</p></div>"
+									+ "<div class=\"modal__footer\"><input type=\"button\" class=\"o-button  js-modal-close\" value=\"Ok\" /></div></div></div></div>");
+			}
+		}
+
+		// hides the result div after 10 seconds
+		if (resultContainerExists) {
+			setTimeout(function () {
+				gts.jQuery("#" + resultSelector).html("")
+					.hide();
+			}, 10000);
+		}
+	},
+
+	fnFormSubmitHandler: function (options, formId, resultSelector, messageCreateCallbackFunction, onBeforeSubmit) {
+
+		// check if we have a result container or we need to use modal
+		var resultContainerExists = false;
+		if (typeof resultSelector !== "undefined" && gts.jQuery("#" + resultSelector).length > 0) {
+			resultContainerExists = true;
+		}
+
+		// if we have a previous result div, hide it
+		if (resultContainerExists) {
+			gts.jQuery("#" + resultSelector).html("")
+				.hide();
+		}
+
+		// if we don't have a js enabled hidden field, add it
+		if (gts.jQuery("#" + formId + " #__JavaScriptEnabled").length === 0) {
+			gts.jQuery("#" + formId).append("<input type=\"hidden\" id=\"__JavaScriptEnabled\" name=\"__JavaScriptEnabled\" value=\"true\" />");
+		}
+
+		// if we have a message building function
+		if (gts.jQuery.isFunction(messageCreateCallbackFunction)) {
+			// get the result
+			var message = messageCreateCallbackFunction();
+
+			// check if we got the correct result
+			if (typeof message === "string" && message.length > 0) {
+				// first of all, add the hidden field
+				if (gts.jQuery("#" + formId + " #__Message").length === 0) {
+					gts.jQuery("#" + formId).append("<input type=\"hidden\" id=\"__Message\" name=\"__Message\" />");
+				}
+
+				// and set the hidden field for it
+				gts.jQuery("#" + formId + " #__Message").val(message);
+			}
+		}
+
+		// if there is an on before submit function
+		if (gts.jQuery.isFunction(onBeforeSubmit)) {
+			onBeforeSubmit();
+		}
+
+		// AJAX submit the form
+		gts.jQuery("#" + formId).ajaxSubmit(options);
+
+		gts.$(document).trigger("AjaxFormSubmitted.StaticPageModule", {
+			form: formId
+		});
+
+	},
+
+	fnConfirmSuccess: function () {
+		/* */
+	},
+
+	// attach form handling function
+	attachFormHandling: function (formId, validationRules, validationMessages, resultSelector, messageCreateCallbackFunction, onBeforeSubmit, validationSettings) {
+		// check if the formId param was set
+		if (typeof formId === "undefined") {
+			return;
+		}
+
+		// attach the handles on document load
+		gts.jQuery(document).ready(function () {
+			// check if the form exists
+			if (gts.jQuery("#" + formId).length === 0) {
+				return;
+			}
+
+			var captchaContainer = gts.$("#" + formId + " #captcha");
+			var options = {
+				// handles the submission result
+				success: function (data) {
+					StaticPageModule.fnAjaxSuccess(data, formId, resultSelector);
+				},
+				cache: false,
+				dataType: "json",
+				resetForm: true
+			};
+
+			if (captchaContainer.length > 0) {
+				var recaptchaResponse = RecaptchaHandler.GetResponse(captchaContainer);
+
+				if (!recaptchaResponse) {
+					RecaptchaHandler.CreateRecaptcha(captchaContainer);
+				}
+			}
+
+			var settings = {
+				// handles the submission
+				submitHandler: function () {
+					if (captchaContainer.length === 0 || RecaptchaHandler.GetResponse(captchaContainer)) {
+						StaticPageModule.fnFormSubmitHandler(options, formId, resultSelector, messageCreateCallbackFunction, onBeforeSubmit);
+					}
+					else {
+						RecaptchaHandler.Execute(captchaContainer);
+					}
+				},
+				// don't ignore any fields by default
+				ignore: [],
+				// set rules, if defined
+				rules: typeof validationRules === "undefined" ? {} : validationRules,
+				// set messages, if defined
+				messages: typeof validationMessages === "undefined" ? {} : validationMessages
+			};
+
+			gts.jQuery("#" + formId).validate(
+				gts.$.extend({}, defaultValidationSettings, settings, validationSettings)
+			);
+		});
+	}
+};
